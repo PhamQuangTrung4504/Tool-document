@@ -1,0 +1,6 @@
+HỢP ĐỒNG CUNG CẤP DỊCH VỤ PHẦN MỀM
+Hôm nay, ngày 01 tháng 10 năm 2026, chúng tôi gồm có:
+| Mã Dịch Vụ | Tên Gói Dịch Vụ | Thời Hạn |
+| --- | --- | --- |
+| DV-01 | Bản quyền Document Assistant Standard | 12 tháng |
+| DV-02 | Hỗ trợ kỹ thuật On-Premise | 24 tháng |
