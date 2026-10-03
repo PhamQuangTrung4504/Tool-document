@@ -2,7 +2,9 @@
 
 > **Offline-first Document Processing Engine for Windows**
 > 
-> Được xây dựng bởi Senior Software Architect & Senior Python Developer. Cung cấp kiến trúc module chuẩn mực để xử lý tài liệu, OCR tiếng Việt, trích xuất cấu trúc layout, và chuyển đổi giữa nhiều định dạng hoàn toàn OFFLINE trên Windows.
+> Hướng dẫn tổng thể cài đặt và sử dụng ứng dụng Desktop: **[Master Documentation](../../README.md)**.
+> 
+> Cung cấp kiến trúc module chuẩn mực để xử lý tài liệu, OCR tiếng Việt, trích xuất cấu trúc layout, và chuyển đổi giữa nhiều định dạng hoàn toàn OFFLINE trên Windows.
 
 ---
 

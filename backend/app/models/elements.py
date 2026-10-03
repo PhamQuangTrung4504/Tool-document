@@ -88,6 +88,8 @@ class TableElement(BaseElement):
     columns: int = Field(..., ge=1, description="Total number of columns")
     cells: List[TableCell] = Field(default_factory=list, description="List of cells in the table")
     has_header: bool = Field(default=False, description="Whether the first row is a header")
+    header_rows: int = Field(default=1, ge=0, description="Number of header rows at top of table")
+    col_widths: List[float] = Field(default_factory=list, description="Explicit column widths in points")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Table detection confidence score [0.0 - 1.0]")
 
     def get_cell(self, row: int, col: int) -> Optional[TableCell]:

@@ -1,5 +1,7 @@
 # Document Assistant Desktop (Tauri 2 + React + TypeScript)
 
+> Hướng dẫn tổng quan & cài đặt toàn diện: **[Master Documentation](../README.md)**.
+
 Ứng dụng Windows Desktop cho hệ thống **Document Assistant**, xử lý và chuyển đổi tài liệu hoàn toàn cục bộ (offline) trên máy tính bằng Tauri 2, React, TypeScript, Vite và backend Python engine qua cơ chế stdin/stdout IPC.
 
 ## Kiến trúc hệ thống

@@ -197,28 +197,46 @@ class DOCXService:
 
         doc = docx.Document()
 
-        from docx.enum.section import WD_ORIENTATION
-
-        # Configure page margins and orientation from the first page
-        sections = doc.sections
-        if sections and document.pages:
-            first_page = document.pages[0]
-            section = sections[0]
-            section.top_margin = Pt(first_page.margin_top)
-            section.bottom_margin = Pt(first_page.margin_bottom)
-            section.left_margin = Pt(first_page.margin_left)
-            section.right_margin = Pt(first_page.margin_right)
-            if first_page.is_landscape:
-                section.orientation = WD_ORIENTATION.LANDSCAPE
-                section.page_width = Pt(first_page.width)
-                section.page_height = Pt(first_page.height)
-            else:
-                section.page_width = Pt(first_page.width)
-                section.page_height = Pt(first_page.height)
+        from docx.enum.section import WD_SECTION_START, WD_ORIENTATION
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+        from docx.oxml import OxmlElement
 
         total_pages = document.total_pages
 
         for page_idx, page in enumerate(document.pages):
+            is_landscape = page.is_landscape
+            w_pt = float(page.width)
+            h_pt = float(page.height)
+
+            if page_idx == 0:
+                section = doc.sections[0]
+                section.orientation = WD_ORIENTATION.LANDSCAPE if is_landscape else WD_ORIENTATION.PORTRAIT
+                section.page_width = Pt(w_pt)
+                section.page_height = Pt(h_pt)
+                section.top_margin = Pt(page.margin_top)
+                section.bottom_margin = Pt(page.margin_bottom)
+                section.left_margin = Pt(page.margin_left)
+                section.right_margin = Pt(page.margin_right)
+            else:
+                prev_page = document.pages[page_idx - 1]
+                prev_is_landscape = prev_page.is_landscape
+                dim_changed = (is_landscape != prev_is_landscape or
+                               abs(w_pt - float(prev_page.width)) > 5.0 or
+                               abs(h_pt - float(prev_page.height)) > 5.0)
+
+                if dim_changed:
+                    section = doc.add_section(WD_SECTION_START.NEW_PAGE)
+                    section.orientation = WD_ORIENTATION.LANDSCAPE if is_landscape else WD_ORIENTATION.PORTRAIT
+                    section.page_width = Pt(w_pt)
+                    section.page_height = Pt(h_pt)
+                    section.top_margin = Pt(page.margin_top)
+                    section.bottom_margin = Pt(page.margin_bottom)
+                    section.left_margin = Pt(page.margin_left)
+                    section.right_margin = Pt(page.margin_right)
+                else:
+                    doc.add_page_break()
+
             sorted_elements = page.get_sorted_elements()
 
             for element in sorted_elements:
@@ -230,10 +248,11 @@ class DOCXService:
                     p.alignment = self._map_alignment_to_docx(element.alignment)
 
                     # Space before / after heuristics
-                    space_b = element.space_before if element.space_before > 0 else 2.0
-                    space_a = element.space_after if element.space_after > 0 else 4.0
+                    space_b = element.space_before if element.space_before > 0 else 1.0
+                    space_a = element.space_after if element.space_after > 0 else 2.0
                     p.paragraph_format.space_before = Pt(space_b)
                     p.paragraph_format.space_after = Pt(space_a)
+                    p.paragraph_format.line_spacing = 1.0
 
                     run = p.add_run(element.text)
                     if element.font_name:
@@ -256,29 +275,81 @@ class DOCXService:
                             run.font.color.rgb = rgb
 
                 elif isinstance(element, TableElement):
-                    matrix = element.to_matrix()
-                    if not matrix or element.rows == 0 or element.columns == 0:
+                    if element.rows == 0 or element.columns == 0:
                         continue
 
                     table = doc.add_table(rows=element.rows, cols=element.columns)
                     table.style = "Table Grid"
 
-                    for r_idx in range(element.rows):
-                        for c_idx in range(element.columns):
-                            cell_text = matrix[r_idx][c_idx] if r_idx < len(matrix) and c_idx < len(matrix[r_idx]) else ""
-                            cell = table.cell(r_idx, c_idx)
-                            cell.text = cell_text
-                            # Bold header row
-                            if r_idx == 0 and element.has_header:
-                                for p in cell.paragraphs:
-                                    for r in p.runs:
-                                        r.bold = True
+                    # 1. Apply column widths if present
+                    if element.col_widths and len(element.col_widths) == element.columns:
+                        for c_idx, cw in enumerate(element.col_widths):
+                            table.columns[c_idx].width = Pt(cw)
+                            for cell in table.columns[c_idx].cells:
+                                cell.width = Pt(cw)
+
+                    # 2. Header row repetition & page split protection
+                    h_rows = max(1, element.header_rows) if element.has_header else 0
+                    for r_idx in range(min(h_rows, element.rows)):
+                        header_tr = table.rows[r_idx]._tr.get_or_add_trPr()
+                        header_tr.append(OxmlElement("w:tblHeader"))
+                    for row in table.rows:
+                        trPr = row._tr.get_or_add_trPr()
+                        trPr.append(OxmlElement("w:cantSplit"))
+
+                    # 3. Cell merging & content population
+                    covered = [[False for _ in range(element.columns)] for _ in range(element.rows)]
+                    for cell in element.cells:
+                        r = cell.row_index
+                        c = cell.col_index
+                        if r >= element.rows or c >= element.columns:
+                            continue
+                        if covered[r][c]:
+                            continue
+
+                        r_span = max(1, cell.row_span)
+                        c_span = max(1, cell.col_span)
+
+                        if r_span > 1 or c_span > 1:
+                            end_r = min(element.rows - 1, r + r_span - 1)
+                            end_c = min(element.columns - 1, c + c_span - 1)
+                            start_c = table.cell(r, c)
+                            end_c_cell = table.cell(end_r, end_c)
+                            target_cell = start_c.merge(end_c_cell)
+                            for dr in range(r_span):
+                                for dc in range(c_span):
+                                    if r + dr < element.rows and c + dc < element.columns:
+                                        covered[r + dr][c + dc] = True
+                        else:
+                            target_cell = table.cell(r, c)
+                            covered[r][c] = True
+
+                        target_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                        target_cell.text = ""
+                        cp = target_cell.paragraphs[0]
+                        cp.text = cell.text
+                        cp.paragraph_format.space_before = Pt(0)
+                        cp.paragraph_format.space_after = Pt(0)
+                        cp.paragraph_format.line_spacing = 1.0
+
+                        is_header = r < h_rows
+                        if is_header:
+                            cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            for run in cp.runs:
+                                run.font.name = document.styles.default_font or "Times New Roman"
+                                run.font.size = Pt(9.5)
+                                run.bold = True
+                        else:
+                            if c == 0:
+                                cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            for run in cp.runs:
+                                run.font.name = document.styles.default_font or "Times New Roman"
+                                run.font.size = Pt(9.5)
 
                 elif isinstance(element, ImageElement):
                     try:
                         if element.image_data:
                             img_stream = io.BytesIO(element.image_data)
-                            # Calculate width in inches
                             width_pt = element.bbox.width if element.bbox.width > 20 else 200.0
                             doc.add_picture(img_stream, width=Pt(min(450.0, width_pt)))
                         elif element.image_path and Path(element.image_path).exists():
@@ -286,10 +357,6 @@ class DOCXService:
                             doc.add_picture(str(element.image_path), width=Pt(min(450.0, width_pt)))
                     except Exception as e:
                         logger.warning(f"Could not embed image into DOCX: {e}")
-
-            # Insert page break between pages (except last page)
-            if page_idx < total_pages - 1:
-                doc.add_page_break()
 
         doc.save(str(out_path))
         return out_path

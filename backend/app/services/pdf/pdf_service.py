@@ -129,7 +129,110 @@ class PDFService:
 
     def _populate_page_from_text_layer(self, page: pymupdf.Page, doc_page: Page) -> None:
         """Extracts text elements, layout blocks, tables, and images from native PDF page."""
-        # 1. Extract structured text blocks and spans
+        # 1. Extract tables first with high fidelity (merged cells, header rows, col widths)
+        detected_tables: List[TableElement] = []
+        table_bboxes: List[BoundingBox] = []
+
+        try:
+            tabs = page.find_tables()
+            for tab in tabs:
+                tab_bbox = BoundingBox(
+                    x1=float(tab.bbox[0]),
+                    y1=float(tab.bbox[1]),
+                    x2=float(tab.bbox[2]),
+                    y2=float(tab.bbox[3]),
+                )
+                df_rows = tab.extract()
+                if not df_rows:
+                    continue
+
+                num_rows = len(df_rows)
+                num_cols = len(df_rows[0]) if num_rows > 0 else 0
+                if num_rows == 0 or num_cols == 0:
+                    continue
+
+                # Detect header rows count
+                h_rows = 1
+                if tab.header and tab.header.bbox:
+                    h_rows = sum(1 for r in tab.rows if r.bbox and r.bbox[3] <= tab.header.bbox[3] + 2)
+                    if h_rows == 0:
+                        h_rows = 1
+
+                # Detect explicit column widths
+                full_rows = [r for r in tab.rows if all(c is not None for c in r.cells)]
+                if full_rows:
+                    col_widths = [float(c[2] - c[0]) for c in full_rows[0].cells]
+                else:
+                    col_widths = [float(tab.bbox[2] - tab.bbox[0]) / num_cols] * num_cols
+
+                cells: List[TableCell] = []
+                covered = [[False for _ in range(num_cols)] for _ in range(num_rows)]
+
+                for r in range(num_rows):
+                    for c in range(num_cols):
+                        if covered[r][c]:
+                            continue
+                        val = df_rows[r][c]
+                        cell_bbox_cand = tab.rows[r].cells[c] if r < len(tab.rows) and c < len(tab.rows[r].cells) else None
+                        if val is None and cell_bbox_cand is None:
+                            continue
+
+                        # Calculate horizontal span (col_span)
+                        col_span = 1
+                        while (c + col_span < num_cols and
+                               not covered[r][c + col_span] and
+                               df_rows[r][c + col_span] is None and
+                               (r >= len(tab.rows) or tab.rows[r].cells[c + col_span] is None)):
+                            col_span += 1
+
+                        # Calculate vertical span (row_span)
+                        row_span = 1
+                        while r + row_span < num_rows:
+                            all_none = True
+                            for check_c in range(c, c + col_span):
+                                val_below = df_rows[r + row_span][check_c]
+                                bbox_below = tab.rows[r + row_span].cells[check_c] if (r + row_span) < len(tab.rows) and check_c < len(tab.rows[r + row_span].cells) else None
+                                if covered[r + row_span][check_c] or val_below is not None or bbox_below is not None:
+                                    all_none = False
+                                    break
+                            if all_none:
+                                row_span += 1
+                            else:
+                                break
+
+                        # Mark covered matrix
+                        for dr in range(row_span):
+                            for dc in range(col_span):
+                                covered[r + dr][c + dc] = True
+
+                        cell_text = str(val or "").strip()
+                        cells.append(
+                            TableCell(
+                                row_index=r,
+                                col_index=c,
+                                row_span=row_span,
+                                col_span=col_span,
+                                text=cell_text,
+                            )
+                        )
+
+                table_el = TableElement(
+                    bbox=tab_bbox,
+                    rows=num_rows,
+                    columns=num_cols,
+                    cells=cells,
+                    has_header=True,
+                    header_rows=h_rows,
+                    col_widths=col_widths,
+                )
+                detected_tables.append(table_el)
+                table_bboxes.append(tab_bbox)
+                doc_page.add_element(table_el)
+
+        except Exception as e:
+            logger.debug(f"Table extraction skipped on page {page.number + 1}: {e}")
+
+        # 2. Extract structured text blocks and spans (filtering out text inside tables to prevent duplication)
         page_dict = page.get_text("dict")
         for block in page_dict.get("blocks", []):
             b_type = block.get("type", 0)
@@ -143,6 +246,22 @@ class PDFService:
                             continue
 
                         span_bbox = span.get("bbox", line_bbox)
+                        bx1 = float(span_bbox[0])
+                        by1 = float(span_bbox[1])
+                        bx2 = float(span_bbox[2])
+                        by2 = float(span_bbox[3])
+
+                        # Skip text spans that are inside any detected table bounding box
+                        cx = (bx1 + bx2) / 2.0
+                        cy = (by1 + by2) / 2.0
+                        is_inside_table = False
+                        for t_box in table_bboxes:
+                            if (t_box.x1 - 2.0 <= cx <= t_box.x2 + 2.0) and (t_box.y1 - 2.0 <= cy <= t_box.y2 + 2.0):
+                                is_inside_table = True
+                                break
+                        if is_inside_table:
+                            continue
+
                         font_size = float(span.get("size", 11.0))
                         font_name = str(span.get("font", "Arial"))
                         flags = span.get("flags", 0)
@@ -155,16 +274,11 @@ class PDFService:
                         color_int = span.get("color", 0)
                         hex_color = f"#{color_int:06x}" if isinstance(color_int, int) else "#000000"
 
-                        bx1 = float(span_bbox[0])
-                        by1 = float(span_bbox[1])
-                        bx2 = float(span_bbox[2])
-                        by2 = float(span_bbox[3])
-
                         # Alignment heuristic based on page width
                         b_center = (bx1 + bx2) / 2.0
                         page_center = doc_page.width / 2.0
                         alignment = TextAlignment.LEFT
-                        if abs(b_center - page_center) < 25.0 and (bx2 - bx1) < (doc_page.width * 0.75):
+                        if abs(b_center - page_center) < 30.0 and (bx2 - bx1) < (doc_page.width * 0.75):
                             alignment = TextAlignment.CENTER
                         elif bx2 > (doc_page.width - 70.0) and bx1 > (doc_page.width * 0.4):
                             alignment = TextAlignment.RIGHT
@@ -205,46 +319,16 @@ class PDFService:
                     )
                 )
 
-        # 2. Extract tables if any exist
-        try:
-            tabs = page.find_tables()
-            for tab in tabs:
-                tab_bbox = BoundingBox(
-                    x1=float(tab.bbox[0]),
-                    y1=float(tab.bbox[1]),
-                    x2=float(tab.bbox[2]),
-                    y2=float(tab.bbox[3]),
-                )
-                df_rows = tab.extract()
-                if not df_rows:
-                    continue
-
-                num_rows = len(df_rows)
-                num_cols = len(df_rows[0]) if num_rows > 0 else 0
-                cells = []
-
-                for r_idx, row in enumerate(df_rows):
-                    for c_idx, cell_value in enumerate(row):
-                        cell_text = str(cell_value or "").strip()
-                        cells.append(
-                            TableCell(
-                                row_index=r_idx,
-                                col_index=c_idx,
-                                text=cell_text,
-                            )
-                        )
-
-                doc_page.add_element(
-                    TableElement(
-                        bbox=tab_bbox,
-                        rows=num_rows,
-                        columns=num_cols,
-                        cells=cells,
-                        has_header=True,
-                    )
-                )
-        except Exception as e:
-            logger.debug(f"Table extraction skipped on page {page.number + 1}: {e}")
+        # 3. Adaptively compute page margins from content elements
+        if doc_page.elements:
+            min_x = min(el.bbox.x1 for el in doc_page.elements)
+            max_x = max(el.bbox.x2 for el in doc_page.elements)
+            min_y = min(el.bbox.y1 for el in doc_page.elements)
+            max_y = max(el.bbox.y2 for el in doc_page.elements)
+            doc_page.margin_left = max(24.0, min(72.0, min_x))
+            doc_page.margin_right = max(24.0, min(72.0, doc_page.width - max_x))
+            doc_page.margin_top = max(24.0, min(72.0, min_y))
+            doc_page.margin_bottom = max(24.0, min(72.0, doc_page.height - max_y))
 
     def _populate_page_with_ocr(
         self,
