@@ -77,6 +77,14 @@ class DocumentLoader:
         elif ftype in (FileType.TXT, FileType.MARKDOWN):
             return self._load_plain_text(source, ftype.value)
 
+        elif ftype == FileType.HTML:
+            return self.pdf_service.parse_to_document(
+                source,
+                force_ocr=force_ocr,
+                mode=mode,
+                cancellation_token=cancellation_token,
+            )
+
         else:
             name = str(source) if isinstance(source, (str, Path)) else "bytes"
             raise UnsupportedFormatError(
@@ -85,7 +93,9 @@ class DocumentLoader:
             )
 
     def _load_plain_text(self, source: Union[str, Path, bytes], format_name: str) -> Document:
-        """Loads plain text or markdown files into Document model."""
+        """Loads plain text or markdown files into Document model with proper A4 pagination."""
+        import textwrap
+
         if isinstance(source, bytes):
             text_content = source.decode("utf-8", errors="replace")
             source_name = "memory.txt"
@@ -96,6 +106,13 @@ class DocumentLoader:
             text_content = path.read_text(encoding="utf-8", errors="replace")
             source_name = str(path)
 
+        page_width = 595.0
+        page_height = 842.0
+        margin_x = 50.0
+        margin_y = 50.0
+        max_y = page_height - margin_y
+        line_height = 16.0
+
         doc = Document(
             metadata=DocumentMetadata(
                 title=Path(source_name).stem,
@@ -104,24 +121,49 @@ class DocumentLoader:
                 page_count=1,
             )
         )
-        page = Page(page_number=1, width=595.0, height=842.0)
-        lines = text_content.splitlines()
-        current_y = 50.0
 
-        for line in lines:
-            line_str = line.strip()
+        current_page_num = 1
+        page = Page(page_number=current_page_num, width=page_width, height=page_height)
+        lines = text_content.splitlines()
+        current_y = margin_y
+
+        for raw_line in lines:
+            line_str = raw_line.rstrip()
             if not line_str:
-                current_y += 12.0
+                current_y += 10.0
+                if current_y > max_y:
+                    doc.add_page(page)
+                    current_page_num += 1
+                    page = Page(page_number=current_page_num, width=page_width, height=page_height)
+                    current_y = margin_y
                 continue
 
-            page.add_element(
-                TextElement(
-                    text=line_str,
-                    bbox=BoundingBox(x1=50, y1=current_y, x2=545, y2=current_y + 14),
-                    font_size=11.0,
-                )
-            )
-            current_y += 18.0
+            # Wrap lines longer than 80 chars to fit standard page width
+            wrapped = textwrap.wrap(line_str, width=80) if len(line_str) > 80 else [line_str]
+            for sub_line in wrapped:
+                if current_y + line_height > max_y:
+                    doc.add_page(page)
+                    current_page_num += 1
+                    page = Page(page_number=current_page_num, width=page_width, height=page_height)
+                    current_y = margin_y
 
-        doc.add_page(page)
+                page.add_element(
+                    TextElement(
+                        text=sub_line,
+                        bbox=BoundingBox(
+                            x1=margin_x,
+                            y1=current_y,
+                            x2=page_width - margin_x,
+                            y2=current_y + 13.0,
+                        ),
+                        font_size=11.0,
+                    )
+                )
+                current_y += line_height
+
+        if page.elements or not doc.pages:
+            doc.add_page(page)
+
+        doc.metadata.page_count = len(doc.pages)
         return doc
+

@@ -14,6 +14,31 @@ from app.services.ocr.ocr_service import OCRService, get_ocr_service
 from app.utils.file_type import detect_file_type
 
 
+def resolve_unique_path(target_path: Path) -> Path:
+    """If target_path already exists, appends (1), (2), ... to prevent overwrite or permission locks."""
+    if not target_path.exists():
+        return target_path
+
+    parent = target_path.parent
+    stem = target_path.stem
+    suffix = target_path.suffix
+
+    import re
+    match = re.match(r"^(.*?)\s*\((\d+)\)$", stem)
+    if match:
+        base_stem = match.group(1)
+        counter = int(match.group(2)) + 1
+    else:
+        base_stem = stem
+        counter = 1
+
+    while True:
+        candidate = parent / f"{base_stem} ({counter}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 class ConversionService:
     """Central orchestration service for converting between heterogeneous document formats."""
 
@@ -34,6 +59,7 @@ class ConversionService:
         lang: Optional[str] = None,
         mode: Union[OCRMode, str] = OCRMode.FAST,
         cancellation_token: Optional[CancellationToken] = None,
+        overwrite: bool = False,
     ) -> Path:
         """Converts an input document or image to the requested target format.
 
@@ -48,6 +74,7 @@ class ConversionService:
             lang: Language code for OCR processing.
             mode: OCRMode (FAST, FULL, or AUTO). Defaults to FAST.
             cancellation_token: Optional cancellation token.
+            overwrite: If False, auto-increments filename with (1), (2)... to avoid overwriting or locks.
 
         Returns:
             Resolved Path of the converted file.
@@ -60,7 +87,16 @@ class ConversionService:
         if output_path is None:
             destination = source_file.with_suffix(f".{target_ext}")
         else:
-            destination = Path(output_path)
+            dest_p = Path(output_path)
+            if dest_p.is_dir() or (not dest_p.suffix and not dest_p.exists()):
+                dest_p.mkdir(parents=True, exist_ok=True)
+                destination = dest_p / f"{source_file.stem}.{target_ext}"
+            else:
+                dest_p.parent.mkdir(parents=True, exist_ok=True)
+                destination = dest_p
+
+        if not overwrite and destination.exists():
+            destination = resolve_unique_path(destination)
 
         source_type = detect_file_type(source_file).value
 
@@ -85,8 +121,13 @@ class ConversionService:
             # 2. Retrieve appropriate exporter
             exporter = get_exporter(target_ext)
 
-            # 3. Export Document model to target format
-            resolved_output = exporter.export(document, destination)
+            # 3. Export Document model to target format with locking fallback
+            try:
+                resolved_output = exporter.export(document, destination)
+            except (PermissionError, OSError) as pe:
+                logger.warning(f"Destination '{destination}' locked or unwritable ({pe}). Resolving unique fallback...")
+                destination = resolve_unique_path(destination)
+                resolved_output = exporter.export(document, destination)
 
             logger.info(f"Successfully converted to {resolved_output}")
             return resolved_output

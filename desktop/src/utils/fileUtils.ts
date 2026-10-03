@@ -26,6 +26,14 @@ export function formatDuration(ms?: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+export function getFileParentDir(filePath: string): string {
+  if (!filePath) return "";
+  const normalized = filePath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash === -1) return "";
+  return normalized.substring(0, lastSlash).replace(/\//g, "\\");
+}
+
 export const SUPPORTED_EXTENSIONS = [
   "pdf",
   "docx",
@@ -35,6 +43,9 @@ export const SUPPORTED_EXTENSIONS = [
   "bmp",
   "tiff",
   "txt",
+  "md",
+  "html",
+  "htm",
 ];
 
 export function isSupportedExtension(ext: string): boolean {

@@ -92,6 +92,8 @@ class IPCHandler:
                 response = self._handle_merge(input_target, output_target, options, t0)
             elif op == "split":
                 response = self._handle_split(input_target, output_target, options, t0)
+            elif op == "list_files":
+                response = self._handle_list_files(input_target, options, t0)
             else:
                 return {
                     "success": False,
@@ -227,14 +229,85 @@ class IPCHandler:
         if not in_p.exists():
             raise FileNotFoundError(str(in_p))
 
-        if in_p.suffix.lower() == ".pdf":
+        size_bytes = in_p.stat().st_size if in_p.is_file() else 0
+        ext = in_p.suffix.lower()
+
+        if ext == ".pdf":
             structure = analyze_pdf(in_p)
             info_data = structure.model_dump()
+            info_data["page_count"] = structure.total_pages
+            info_data["total_pages"] = structure.total_pages
+            info_data["size_bytes"] = size_bytes
+            info_data["title"] = structure.title or in_p.stem
+            info_data["filename"] = in_p.name
+            info_data["suffix"] = ext
+            info_data["pdf_type"] = structure.pdf_type.value
+        elif ext == ".docx":
+            try:
+                from docx import Document as DocxDoc
+                docx_d = DocxDoc(str(in_p))
+                para_count = len(docx_d.paragraphs)
+                table_count = len(docx_d.tables)
+                page_est = max(1, (para_count + 3) // 4)
+            except Exception:
+                para_count = 0
+                table_count = 0
+                page_est = 1
+
+            info_data = {
+                "filename": in_p.name,
+                "title": in_p.stem,
+                "size_bytes": size_bytes,
+                "suffix": ext,
+                "paragraph_count": para_count,
+                "table_count": table_count,
+                "page_count": page_est,
+                "total_pages": page_est,
+            }
+        elif ext in (".txt", ".md"):
+            try:
+                content = in_p.read_text(encoding="utf-8", errors="replace")
+                lines = content.splitlines()
+                page_est = max(1, (len(lines) + 44) // 45)
+            except Exception:
+                lines = []
+                page_est = 1
+
+            info_data = {
+                "filename": in_p.name,
+                "title": in_p.stem,
+                "size_bytes": size_bytes,
+                "suffix": ext,
+                "line_count": len(lines),
+                "page_count": page_est,
+                "total_pages": page_est,
+            }
+        elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"):
+            try:
+                from PIL import Image
+                with Image.open(in_p) as img:
+                    w, h = img.size
+            except Exception:
+                w, h = 0, 0
+
+            info_data = {
+                "filename": in_p.name,
+                "title": in_p.stem,
+                "size_bytes": size_bytes,
+                "suffix": ext,
+                "width": w,
+                "height": h,
+                "page_count": 1,
+                "total_pages": 1,
+            }
         else:
             info_data = {
                 "filename": in_p.name,
-                "size_bytes": in_p.stat().st_size,
-                "suffix": in_p.suffix.lower(),
+                "title": in_p.stem,
+                "size_bytes": size_bytes,
+                "suffix": ext,
+                "page_count": 1,
+                "total_pages": 1,
             }
 
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
@@ -279,14 +352,23 @@ class IPCHandler:
     ) -> Dict[str, Any]:
         if not input_path:
             raise InvalidDocumentError("", "Missing 'input' path in split request")
-        if not output_path:
-            raise InvalidDocumentError("", "Missing 'output' directory path in split request")
 
         in_p = Path(input_path)
-        out_dir = Path(output_path)
-        pages_per_split = int(options.get("pages_per_split", 1))
+        if output_path:
+            out_dir = Path(output_path)
+        else:
+            out_dir = in_p.parent / f"{in_p.stem}_split"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        created_files = self.pdf_service.split_pdf(in_p, out_dir, pages_per_split=pages_per_split)
+        pages_per_split = int(options.get("pages_per_split", 1)) if options.get("pages_per_split") else 1
+        page_ranges = options.get("page_ranges")
+
+        created_files = self.pdf_service.split_pdf(
+            in_p,
+            out_dir,
+            page_ranges=page_ranges,
+            pages_per_split=pages_per_split,
+        )
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
         return {
@@ -294,5 +376,46 @@ class IPCHandler:
             "operation": "split",
             "output": [str(p) for p in created_files],
             "metrics": {"processing_time_ms": elapsed_ms, "chunks": len(created_files)},
+            "warnings": [],
+        }
+
+    def _handle_list_files(
+        self,
+        folder_path: Any,
+        options: Dict[str, Any],
+        start_time: float,
+    ) -> Dict[str, Any]:
+        if not folder_path:
+            raise InvalidDocumentError("", "Missing folder path in list_files request")
+
+        f_path = Path(folder_path)
+        if not f_path.exists() or not f_path.is_dir():
+            raise InvalidDocumentError(str(f_path), "Directory does not exist or is not a directory")
+
+        supported = {"pdf", "docx", "png", "jpg", "jpeg", "bmp", "tiff", "txt", "md", "html", "htm"}
+        items = []
+
+        try:
+            for entry in f_path.iterdir():
+                if entry.is_file():
+                    ext = entry.suffix.lstrip(".").lower()
+                    if ext in supported:
+                        items.append({
+                            "name": entry.name,
+                            "path": str(entry),
+                            "size_bytes": entry.stat().st_size,
+                            "ext": ext,
+                        })
+        except Exception as e:
+            logger.warning(f"Error reading directory {f_path}: {e}")
+
+        items.sort(key=lambda x: x["name"].lower())
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+
+        return {
+            "success": True,
+            "operation": "list_files",
+            "output": items,
+            "metrics": {"processing_time_ms": elapsed_ms, "count": len(items)},
             "warnings": [],
         }

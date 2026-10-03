@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { UploadCloud, Folder, FilePlus } from "lucide-react";
 import { tauriIpc } from "../services/tauriIpc";
+import { FolderFileModal } from "./FolderFileModal";
 
 interface FileDropzoneProps {
   onFilesSelected: (filePaths: string[]) => void;
@@ -14,6 +15,11 @@ export const FileDropzone: React.FC<FileDropzoneProps> = ({
   allowedExtensions,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
+
+  const [folderModalData, setFolderModalData] = useState<{
+    folderPath: string;
+    files: any[];
+  } | null>(null);
 
   const handleSelectFiles = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -32,7 +38,12 @@ export const FileDropzone: React.FC<FileDropzoneProps> = ({
     try {
       const folder = await tauriIpc.pickFolder();
       if (folder) {
-        onFilesSelected([folder]);
+        const files = await tauriIpc.listFilesInFolder(folder);
+        if (files && files.length > 0) {
+          setFolderModalData({ folderPath: folder, files });
+        } else {
+          alert("Thư mục đã chọn không chứa file tài liệu nào được hỗ trợ (.pdf, .docx, .png, .jpg, .txt, .md, .html).");
+        }
       }
     } catch (err) {
       console.error("Error picking folder:", err);
@@ -100,6 +111,19 @@ export const FileDropzone: React.FC<FileDropzoneProps> = ({
           <span>Chọn thư mục</span>
         </button>
       </div>
+
+      {folderModalData && (
+        <FolderFileModal
+          folderPath={folderModalData.folderPath}
+          files={folderModalData.files}
+          multiple={multiple}
+          onSelect={(paths) => {
+            onFilesSelected(paths);
+            setFolderModalData(null);
+          }}
+          onClose={() => setFolderModalData(null)}
+        />
+      )}
     </div>
   );
 };

@@ -14,7 +14,8 @@ pub fn run() {
             cancel_operation,
             get_backend_status,
             open_file,
-            open_folder
+            open_folder,
+            list_files_in_folder
         ])
         .run(tauri::generate_context!())
         .expect("Lỗi khi khởi chạy Document Assistant desktop app");

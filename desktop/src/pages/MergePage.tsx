@@ -5,11 +5,12 @@ import { ResultCard } from "../components/ResultCard";
 import { JobStatus, IPCResponse } from "../types/ipc";
 import { tauriIpc } from "../services/tauriIpc";
 import { historyService } from "../services/historyService";
-import { getFileName, mapErrorCodeToVietnamese } from "../utils/fileUtils";
-import { Plus, Files, Play, AlertCircle } from "lucide-react";
+import { getFileName, mapErrorCodeToVietnamese, getFileParentDir } from "../utils/fileUtils";
+import { Plus, Files, Play, AlertCircle, Folder } from "lucide-react";
 
 export const MergePage: React.FC = () => {
   const [files, setFiles] = useState<string[]>([]);
+  const [customOutputDir, setCustomOutputDir] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus>("IDLE");
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [result, setResult] = useState<IPCResponse | null>(null);
@@ -39,7 +40,10 @@ export const MergePage: React.FC = () => {
     }
 
     const first = files[0];
-    const outputPath = first.replace(/\.pdf$/i, "_merged.pdf");
+    const baseName = getFileName(first).replace(/\.pdf$/i, "");
+    const outputPath = customOutputDir
+      ? `${customOutputDir}\\${baseName}_merged.pdf`
+      : first.replace(/\.pdf$/i, "_merged.pdf");
 
     const jobId = "merge_" + Date.now();
     setCurrentJobId(jobId);
@@ -170,6 +174,60 @@ export const MergePage: React.FC = () => {
                   onRemove={() => handleRemoveFile(index)}
                 />
               ))}
+
+              {/* Save Location (Địa chỉ lưu) */}
+              <div className="option-section" style={{ marginTop: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <label className="option-label">Địa chỉ lưu file ghép</label>
+                  {customOutputDir && (
+                    <button
+                      type="button"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent-primary)",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        fontWeight: 500,
+                      }}
+                      onClick={() => setCustomOutputDir(null)}
+                    >
+                      Đặt lại mặc định
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      padding: "8px 12px",
+                      backgroundColor: "var(--bg-primary)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "var(--radius-md)",
+                      fontSize: "12.5px",
+                      color: customOutputDir ? "var(--text-primary)" : "var(--text-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={customOutputDir || (files[0] ? getFileParentDir(files[0]) : "")}
+                  >
+                    📁 {customOutputDir || (files[0] ? `Mặc định: ${getFileParentDir(files[0])}` : "Cùng thư mục file đầu tiên")}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: "8px 14px", fontSize: "12.5px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "6px" }}
+                    onClick={async () => {
+                      const folder = await tauriIpc.pickFolder();
+                      if (folder) setCustomOutputDir(folder);
+                    }}
+                  >
+                    <Folder size={14} />
+                    <span>Chọn nơi lưu...</span>
+                  </button>
+                </div>
+              </div>
 
               <div
                 style={{

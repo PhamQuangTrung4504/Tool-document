@@ -1,8 +1,15 @@
-export type OperationType = "convert" | "ocr" | "info" | "merge" | "split";
+export type OperationType = "convert" | "ocr" | "info" | "merge" | "split" | "list_files";
 
 export type OCRMode = "auto" | "fast" | "full";
 
 export type OutputFormat = "docx" | "pdf" | "txt" | "html" | "md";
+
+export interface FolderFileItem {
+  name: string;
+  path: string;
+  size_bytes: number;
+  ext: string;
+}
 
 export type JobStatus = "IDLE" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 

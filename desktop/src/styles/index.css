@@ -441,9 +441,56 @@ html, body, #root {
 
 .radio-btn.active {
   border-color: var(--accent-primary);
-  background-color: var(--accent-light);
-  color: var(--accent-text);
+  background-color: #dbeafe;
+  color: #1d4ed8;
   font-weight: 600;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.op-convert-active {
+  border-color: #2563eb !important;
+  background-color: #dbeafe !important;
+  color: #1d4ed8 !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2) !important;
+}
+
+.op-ocr-active {
+  border-color: #d97706 !important;
+  background-color: #fef3c7 !important;
+  color: #b45309 !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.2) !important;
+}
+
+.op-split-active {
+  border-color: #9333ea !important;
+  background-color: #f3e8ff !important;
+  color: #7e22ce !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.2) !important;
+}
+
+[data-theme="dark"] .radio-btn.active,
+[data-theme="dark"] .op-convert-active {
+  border-color: #3b82f6 !important;
+  background-color: #1e3a8a !important;
+  color: #dbeafe !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25) !important;
+}
+
+[data-theme="dark"] .op-ocr-active {
+  border-color: #f59e0b !important;
+  background-color: #78350f !important;
+  color: #fef3c7 !important;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+}
+
+[data-theme="dark"] .op-split-active {
+  border-color: #a855f7 !important;
+  background-color: #581c87 !important;
+  color: #f3e8ff !important;
+  box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.25) !important;
 }
 
 /* Status Chips */

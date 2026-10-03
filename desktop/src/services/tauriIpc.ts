@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { BackendStatus, IPCRequest, IPCResponse } from "../types/ipc";
+import { BackendStatus, FolderFileItem, IPCRequest, IPCResponse } from "../types/ipc";
 
 export const isTauriEnvironment = (): boolean => {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -128,5 +128,34 @@ export const tauriIpc = {
     });
     if (!selected || Array.isArray(selected)) return null;
     return selected;
+  },
+
+  async listFilesInFolder(folderPath: string): Promise<FolderFileItem[]> {
+    if (isTauriEnvironment()) {
+      try {
+        const items = await invoke<FolderFileItem[]>("list_files_in_folder", {
+          folderPath,
+        });
+        if (items && Array.isArray(items)) {
+          return items;
+        }
+      } catch (err) {
+        console.warn("Native list_files_in_folder failed, falling back to python IPC:", err);
+      }
+    }
+
+    // Python IPC fallback
+    try {
+      const resp = await this.executeIpc({
+        operation: "list_files",
+        input: folderPath,
+      });
+      if (resp.success && Array.isArray(resp.output)) {
+        return resp.output as FolderFileItem[];
+      }
+    } catch (e) {
+      console.error("Failed to list files via IPC:", e);
+    }
+    return [];
   },
 };

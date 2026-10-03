@@ -6,7 +6,7 @@ from typing import Union
 
 from app.exporters.base import BaseExporter
 from app.models.document import Document
-from app.models.elements import TableElement, TextAlignment, TextElement
+from app.models.elements import ImageElement, TableElement, TextAlignment, TextElement
 
 
 class HTMLExporter(BaseExporter):
@@ -51,15 +51,65 @@ class HTMLExporter(BaseExporter):
                     else:
                         body_parts.append(f"<p{style_attr}>{escaped_text}</p>")
 
+                elif isinstance(el, ImageElement):
+                    import base64
+                    img_data = el.image_data
+                    if not img_data and el.image_path and Path(el.image_path).exists():
+                        try:
+                            img_data = Path(el.image_path).read_bytes()
+                        except Exception:
+                            img_data = None
+
+                    if img_data:
+                        fmt = el.format or "png"
+                        b64_str = base64.b64encode(img_data).decode("ascii")
+                        data_uri = f"data:image/{fmt};base64,{b64_str}"
+                        w_pt = el.bbox.width if el.bbox.width > 20 else 200.0
+                        body_parts.append(
+                            f'<div class="doc-image" style="margin: 12px 0;">'
+                            f'<img src="{data_uri}" style="max-width: 100%; width: {w_pt:.1f}pt; height: auto; display: block;" alt="Document Image" />'
+                            f'</div>'
+                        )
+
                 elif isinstance(el, TableElement):
-                    matrix = el.to_matrix()
-                    if matrix:
+                    if el.rows > 0 and el.columns > 0:
                         body_parts.append('<table class="doc-table">')
-                        for r_idx, row in enumerate(matrix):
-                            tag = "th" if (r_idx == 0 and el.has_header) else "td"
+                        covered = [[False for _ in range(el.columns)] for _ in range(el.rows)]
+
+                        # Map cell positions
+                        cell_map = {(c.row_index, c.col_index): c for c in el.cells}
+
+                        for r in range(el.rows):
                             body_parts.append("<tr>")
-                            for val in row:
-                                body_parts.append(f"<{tag}>{html.escape(val)}</{tag}>")
+                            for c in range(el.columns):
+                                if covered[r][c]:
+                                    continue
+
+                                cell = cell_map.get((r, c))
+                                if cell is None:
+                                    tag = "th" if (r < el.header_rows and el.has_header) else "td"
+                                    body_parts.append(f"<{tag}></{tag}>")
+                                    covered[r][c] = True
+                                    continue
+
+                                r_span = max(1, cell.row_span)
+                                c_span = max(1, cell.col_span)
+
+                                for dr in range(r_span):
+                                    for dc in range(c_span):
+                                        if r + dr < el.rows and c + dc < el.columns:
+                                            covered[r + dr][c + dc] = True
+
+                                span_attrs = []
+                                if r_span > 1:
+                                    span_attrs.append(f'rowspan="{r_span}"')
+                                if c_span > 1:
+                                    span_attrs.append(f'colspan="{c_span}"')
+                                span_str = f" {' '.join(span_attrs)}" if span_attrs else ""
+
+                                tag = "th" if (r < el.header_rows and el.has_header) else "td"
+                                escaped_val = html.escape(cell.text).replace("\n", "<br/>")
+                                body_parts.append(f"<{tag}{span_str}>{escaped_val}</{tag}>")
                             body_parts.append("</tr>")
                         body_parts.append("</table>")
 

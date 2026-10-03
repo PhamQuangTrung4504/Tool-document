@@ -302,10 +302,48 @@ class PDFService:
                             )
                         )
 
-            elif b_type == 1:  # Image block
-                bbox_list = block.get("bbox", [0, 0, 0, 0])
-                img_bytes = block.get("image", None)
-                ext = block.get("ext", "png")
+            elif b_type == 1:
+                # Handled via high-fidelity xref extraction below
+                pass
+
+        # 3. Extract images with high-fidelity SMask / Alpha preservation & white background compositing
+        try:
+            from PIL import Image
+            import io
+            img_infos = page.get_image_info(xrefs=True)
+            for info in img_infos:
+                xref = info.get("xref", 0)
+                bbox_list = info.get("bbox", [0, 0, 0, 0])
+                if xref <= 0:
+                    continue
+                extracted = page.parent.extract_image(xref)
+                if not extracted or not extracted.get("image"):
+                    continue
+                raw_bytes = extracted["image"]
+                img = Image.open(io.BytesIO(raw_bytes))
+                smask_xref = extracted.get("smask", 0)
+                if smask_xref and smask_xref > 0:
+                    try:
+                        mask_extracted = page.parent.extract_image(smask_xref)
+                        if mask_extracted and mask_extracted.get("image"):
+                            mask_img = Image.open(io.BytesIO(mask_extracted["image"])).convert("L")
+                            img = img.convert("RGB")
+                            img.putalpha(mask_img)
+                    except Exception as me:
+                        logger.debug(f"Failed to apply smask {smask_xref}: {me}")
+
+                # If image has alpha/transparency, composite onto pure white background
+                # to prevent black background rendering in Microsoft Word / viewers
+                if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                    img = Image.alpha_composite(bg, img.convert("RGBA")).convert("RGB")
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+
                 doc_page.add_element(
                     ImageElement(
                         bbox=BoundingBox(
@@ -314,12 +352,14 @@ class PDFService:
                             x2=float(bbox_list[2]),
                             y2=float(bbox_list[3]),
                         ),
-                        image_data=img_bytes,
-                        format=ext,
+                        image_data=png_bytes,
+                        format="png",
                     )
                 )
+        except Exception as e:
+            logger.warning(f"Advanced image extraction failed on page {page.number + 1}: {e}")
 
-        # 3. Adaptively compute page margins from content elements
+        # 4. Adaptively compute page margins from content elements
         if doc_page.elements:
             min_x = min(el.bbox.x1 for el in doc_page.elements)
             max_x = max(el.bbox.x2 for el in doc_page.elements)
@@ -434,10 +474,13 @@ class PDFService:
         pdf_path: Union[str, Path],
         output_dir: Union[str, Path],
         page_ranges: Optional[str] = None,
+        pages_per_split: int = 1,
     ) -> List[Path]:
-        """Splits a PDF by page ranges or into individual pages.
+        """Splits a PDF by page ranges or into chunks of pages.
 
-        Example page_ranges: '1-3, 5, 7-10'. If None, each page becomes an individual PDF.
+        Example page_ranges: '1-3, 5, 7-10'. If None/empty and pages_per_split == 1,
+        each page becomes an individual PDF. If pages_per_split > 1, batches of N pages
+        are created.
         """
         fpath = Path(pdf_path)
         out_dir = Path(output_dir)
@@ -451,35 +494,44 @@ class PDFService:
             if total_pages == 0:
                 return created_files
 
-            if not page_ranges or page_ranges.strip().lower() == "all":
-                # Split every single page
-                for i in range(total_pages):
-                    single_doc = pymupdf.open()
-                    single_doc.insert_pdf(doc, from_page=i, to_page=i)
-                    out_file = out_dir / f"{fpath.stem}_page_{i + 1}.pdf"
-                    single_doc.save(str(out_file))
-                    single_doc.close()
+            if page_ranges and page_ranges.strip().lower() != "all":
+                # Parse range string: e.g. "1-3, 5, 7-10"
+                ranges = [r.strip() for r in page_ranges.split(",") if r.strip()]
+                for r_idx, r_str in enumerate(ranges):
+                    if "-" in r_str:
+                        parts = r_str.split("-")
+                        start = max(1, int(parts[0].strip()))
+                        end = min(total_pages, int(parts[1].strip()))
+                    else:
+                        start = end = int(r_str)
+
+                    if start > end or start > total_pages:
+                        continue
+
+                    range_doc = pymupdf.open()
+                    range_doc.insert_pdf(doc, from_page=start - 1, to_page=end - 1)
+                    if start == end:
+                        out_file = out_dir / f"{fpath.stem}_page_{start}.pdf"
+                    else:
+                        out_file = out_dir / f"{fpath.stem}_split_{start}_{end}.pdf"
+                    range_doc.save(str(out_file))
+                    range_doc.close()
                     created_files.append(out_file)
                 return created_files
 
-            # Parse range string: e.g. "1-3, 5"
-            ranges = [r.strip() for r in page_ranges.split(",") if r.strip()]
-            for r_idx, r_str in enumerate(ranges):
-                if "-" in r_str:
-                    parts = r_str.split("-")
-                    start = max(1, int(parts[0].strip()))
-                    end = min(total_pages, int(parts[1].strip()))
+            # Pages per split (default 1)
+            chunk_size = max(1, pages_per_split)
+            for i in range(0, total_pages, chunk_size):
+                start = i
+                end = min(i + chunk_size - 1, total_pages - 1)
+                single_doc = pymupdf.open()
+                single_doc.insert_pdf(doc, from_page=start, to_page=end)
+                if chunk_size == 1:
+                    out_file = out_dir / f"{fpath.stem}_page_{start + 1}.pdf"
                 else:
-                    start = end = int(r_str)
-
-                if start > end or start > total_pages:
-                    continue
-
-                range_doc = pymupdf.open()
-                range_doc.insert_pdf(doc, from_page=start - 1, to_page=end - 1)
-                out_file = out_dir / f"{fpath.stem}_split_{start}_{end}.pdf"
-                range_doc.save(str(out_file))
-                range_doc.close()
+                    out_file = out_dir / f"{fpath.stem}_part_{start + 1}_{end + 1}.pdf"
+                single_doc.save(str(out_file))
+                single_doc.close()
                 created_files.append(out_file)
 
             return created_files

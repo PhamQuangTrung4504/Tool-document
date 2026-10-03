@@ -1,16 +1,19 @@
 import React from "react";
-import { Play } from "lucide-react";
+import { Play, Folder } from "lucide-react";
 import { OperationType, OCRMode, OutputFormat } from "../types/ipc";
-import { getFileExtension } from "../utils/fileUtils";
+import { getFileExtension, getFileParentDir } from "../utils/fileUtils";
+import { tauriIpc } from "../services/tauriIpc";
 
 interface OperationPanelProps {
   selectedFile: string;
   operation: OperationType;
   ocrMode: OCRMode;
   outputFormat: OutputFormat;
+  outputDir?: string | null;
   onChangeOperation: (op: OperationType) => void;
   onChangeOcrMode: (mode: OCRMode) => void;
   onChangeOutputFormat: (fmt: OutputFormat) => void;
+  onChangeOutputDir?: (dir: string | null) => void;
   onStart: () => void;
   isProcessing: boolean;
 }
@@ -20,9 +23,11 @@ export const OperationPanel: React.FC<OperationPanelProps> = ({
   operation,
   ocrMode,
   outputFormat,
+  outputDir,
   onChangeOperation,
   onChangeOcrMode,
   onChangeOutputFormat,
+  onChangeOutputDir,
   onStart,
   isProcessing,
 }) => {
@@ -36,36 +41,79 @@ export const OperationPanel: React.FC<OperationPanelProps> = ({
     if (isDocx) {
       return [
         { id: "pdf", label: "PDF" },
+        { id: "html", label: "HTML" },
         { id: "txt", label: "TXT" },
         { id: "md", label: "Markdown" },
-        { id: "html", label: "HTML" },
       ];
     }
     if (isPdf) {
       return [
         { id: "docx", label: "DOCX" },
+        { id: "html", label: "HTML" },
         { id: "txt", label: "TXT" },
         { id: "md", label: "Markdown" },
-        { id: "html", label: "HTML" },
       ];
     }
     if (isImage) {
       return [
         { id: "docx", label: "DOCX" },
         { id: "pdf", label: "PDF" },
+        { id: "html", label: "HTML" },
         { id: "txt", label: "TXT" },
         { id: "md", label: "Markdown" },
+      ];
+    }
+    if (ext === "txt") {
+      return [
+        { id: "docx", label: "DOCX" },
+        { id: "pdf", label: "PDF" },
         { id: "html", label: "HTML" },
+        { id: "md", label: "Markdown" },
+      ];
+    }
+    if (ext === "md") {
+      return [
+        { id: "docx", label: "DOCX" },
+        { id: "pdf", label: "PDF" },
+        { id: "html", label: "HTML" },
+        { id: "txt", label: "TXT" },
+      ];
+    }
+    if (ext === "html" || ext === "htm") {
+      return [
+        { id: "docx", label: "DOCX" },
+        { id: "pdf", label: "PDF" },
+        { id: "txt", label: "TXT" },
+        { id: "md", label: "Markdown" },
       ];
     }
     return [
       { id: "docx", label: "DOCX" },
       { id: "pdf", label: "PDF" },
+      { id: "html", label: "HTML" },
       { id: "txt", label: "TXT" },
+      { id: "md", label: "Markdown" },
     ];
   };
 
   const availableFormats = getAvailableFormats();
+
+  React.useEffect(() => {
+    if (availableFormats.length > 0 && !availableFormats.some((f) => f.id === outputFormat)) {
+      onChangeOutputFormat(availableFormats[0].id);
+    }
+  }, [selectedFile, operation]);
+
+  const handlePickOutputDir = async () => {
+    try {
+      const folder = await tauriIpc.pickFolder();
+      if (folder) {
+        onChangeOutputDir?.(folder);
+      }
+    } catch (err) {
+      console.error("Error picking output directory:", err);
+    }
+  };
 
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -82,28 +130,53 @@ export const OperationPanel: React.FC<OperationPanelProps> = ({
         <div className="radio-group">
           <button
             type="button"
-            className={`radio-btn ${operation === "convert" ? "active" : ""}`}
+            className={`radio-btn op-btn ${operation === "convert" ? "active op-convert-active" : ""}`}
             onClick={() => onChangeOperation("convert")}
           >
-            Chuyển đổi (Convert)
+            <span
+              style={{
+                display: "inline-block",
+                width: "8px",
+                height: "8px",
+                borderRadius: "50%",
+                backgroundColor: operation === "convert" ? "var(--accent-primary)" : "var(--border-strong)",
+              }}
+            />
+            <span>Chuyển đổi (Convert)</span>
           </button>
           <button
             type="button"
-            className={`radio-btn ${operation === "ocr" ? "active" : ""}`}
+            className={`radio-btn op-btn ${operation === "ocr" ? "active op-ocr-active" : ""}`}
             onClick={() => onChangeOperation("ocr")}
           >
-            Nhận diện (OCR)
+            <span
+              style={{
+                display: "inline-block",
+                width: "8px",
+                height: "8px",
+                borderRadius: "50%",
+                backgroundColor: operation === "ocr" ? "#d97706" : "var(--border-strong)",
+              }}
+            />
+            <span>Nhận diện (OCR)</span>
           </button>
           {isPdf && (
-            <>
-              <button
-                type="button"
-                className={`radio-btn ${operation === "split" ? "active" : ""}`}
-                onClick={() => onChangeOperation("split")}
-              >
-                Tách PDF (Split)
-              </button>
-            </>
+            <button
+              type="button"
+              className={`radio-btn op-btn ${operation === "split" ? "active op-split-active" : ""}`}
+              onClick={() => onChangeOperation("split")}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: operation === "split" ? "#9333ea" : "var(--border-strong)",
+                }}
+              />
+              <span>Tách PDF (Split)</span>
+            </button>
           )}
         </div>
       </div>
@@ -163,6 +236,57 @@ export const OperationPanel: React.FC<OperationPanelProps> = ({
           </div>
         </div>
       )}
+
+      {/* Destination Directory (Địa chỉ lưu) */}
+      <div className="option-section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <label className="option-label">Địa chỉ lưu file</label>
+          {outputDir && (
+            <button
+              type="button"
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--accent-primary)",
+                fontSize: "12px",
+                cursor: "pointer",
+                fontWeight: 500,
+              }}
+              onClick={() => onChangeOutputDir?.(null)}
+            >
+              Đặt lại mặc định
+            </button>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              backgroundColor: "var(--bg-primary)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-md)",
+              fontSize: "12.5px",
+              color: outputDir ? "var(--text-primary)" : "var(--text-muted)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={outputDir || (selectedFile ? getFileParentDir(selectedFile) : "Cùng thư mục file gốc")}
+          >
+            📁 {outputDir || (selectedFile ? `Mặc định: ${getFileParentDir(selectedFile)}` : "Cùng thư mục file gốc")}
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: "8px 14px", fontSize: "12.5px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "6px" }}
+            onClick={handlePickOutputDir}
+          >
+            <Folder size={14} />
+            <span>Chọn nơi lưu...</span>
+          </button>
+        </div>
+      </div>
 
       {/* Action Button */}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>

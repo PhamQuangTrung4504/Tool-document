@@ -172,3 +172,52 @@ pub async fn open_folder(path: String) -> Result<(), String> {
 
     Ok(())
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct FolderFileItem {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub ext: String,
+}
+
+#[tauri::command]
+pub async fn list_files_in_folder(folder_path: String) -> Result<Vec<FolderFileItem>, String> {
+    let p = Path::new(&folder_path);
+    if !p.exists() || !p.is_dir() {
+        return Err(format!("Thư mục không tồn tại: {}", folder_path));
+    }
+
+    let mut items = Vec::new();
+    let supported = [
+        "pdf", "docx", "png", "jpg", "jpeg", "bmp", "tiff", "txt", "md", "html", "htm",
+    ];
+
+    if let Ok(entries) = std::fs::read_dir(p) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    let ext_lower = ext.to_lowercase();
+                    if supported.contains(&ext_lower.as_str()) {
+                        let name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        items.push(FolderFileItem {
+                            name,
+                            path: path.to_string_lossy().to_string(),
+                            size_bytes,
+                            ext: ext_lower,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(items)
+}

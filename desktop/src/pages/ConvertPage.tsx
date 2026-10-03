@@ -14,6 +14,7 @@ export const ConvertPage: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [ocrMode, setOcrMode] = useState<OCRMode>("auto");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("docx");
+  const [outputDir, setOutputDir] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus>("IDLE");
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [result, setResult] = useState<IPCResponse | null>(null);
@@ -33,6 +34,7 @@ export const ConvertPage: React.FC = () => {
     const request = {
       operation: "convert" as const,
       input: selectedFile,
+      output: outputDir || undefined,
       options: {
         to_format: outputFormat,
         ocr_mode: ocrMode,
@@ -85,6 +87,7 @@ export const ConvertPage: React.FC = () => {
     setResult(null);
     setErrorMessage(null);
     setJobStatus("IDLE");
+    setOutputDir(null);
   };
 
   return (
@@ -114,9 +117,11 @@ export const ConvertPage: React.FC = () => {
               operation="convert"
               ocrMode={ocrMode}
               outputFormat={outputFormat}
+              outputDir={outputDir}
               onChangeOperation={() => {}}
               onChangeOcrMode={setOcrMode}
               onChangeOutputFormat={setOutputFormat}
+              onChangeOutputDir={setOutputDir}
               onStart={handleStart}
               isProcessing={jobStatus === "RUNNING"}
             />
